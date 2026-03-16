@@ -827,4 +827,298 @@ curl -X GET http://localhost:3003/game/rounds/1
 
 ============================================================================================================
 =========================================================================================================
+                                 History-service
+======================================================================================================
+ History Microservice (with Prisma + PostgreSQL)
+
+---
+
+## **1️⃣ Setup Node & Nest**
+
+```bash
+nvm use 22
+node -v
+```
+
+```bash
+cd /workspaces/backend-revise/backend
+nest new history-service
+cd history-service
+```
+
+---
+
+## **2️⃣ Install Dependencies**
+
+```bash
+npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
+npm install -D @types/passport-jwt @types/bcrypt
+npm install prisma@4 --save-dev
+npm install @prisma/client@4
+```
+
+---
+
+## **3️⃣ Initialize Prisma**
+
+```bash
+npx prisma init
+```
+
+Edit `.env`:
+
+```env
+DATABASE_URL="postgresql://viral_user:viral123@localhost:5432/viral_history_db"
+```
+
+> Make sure you created the database beforehand:
+
+```sql
+CREATE DATABASE viral_history_db;
+GRANT ALL PRIVILEGES ON DATABASE viral_history_db TO viral_user;
+\c viral_history_db
+GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
+```
+
+---
+
+## **4️⃣ Define Prisma Schema**
+
+Edit `prisma/schema.prisma`:
+
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PlayerStats {
+  id          Int      @id @default(autoincrement())
+  username    String   @unique
+  totalBets   Float    @default(0)
+  totalWins   Float    @default(0)
+  totalLosses Float    @default(0)
+  createdAt   DateTime @default(now())
+}
+```
+
+---
+
+## **5️⃣ Prisma Generate & Migrate**
+
+```bash
+npx prisma generate
+npx prisma migrate dev --name init
+npx prisma studio  # optional GUI to check DB
+```
+
+---
+
+## **6️⃣ Generate Prisma Service in Nest**
+
+```bash
+npx nest g service prisma
+```
+
+`src/prisma/prisma.service.ts`:
+
+```ts
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy {
+
+  async onModuleInit() {
+    await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+}
+```
+
+---
+
+## **7️⃣ Generate History Module, Service, Controller**
+
+```bash
+npx nest g module history
+npx nest g service history
+npx nest g controller history
+```
+
+---
+
+## **8️⃣ Implement History Service**
+
+`src/history/history.service.ts`:
+
+```ts
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class HistoryService {
+  constructor(private prisma: PrismaService) {}
+
+  async getPlayerStats(username: string) {
+    if (!username) throw new BadRequestException('Username is required');
+
+    const player = await this.prisma.playerStats.findUnique({
+      where: { username },
+    });
+
+    return player || null;
+  }
+
+  async upsertPlayerStats(username: string, bets: number, wins: number, losses: number) {
+    if (!username) throw new BadRequestException('Username is required');
+
+    return this.prisma.playerStats.upsert({
+      where: { username },
+      create: { username, totalBets: bets, totalWins: wins, totalLosses: losses },
+      update: {
+        totalBets: { increment: bets },
+        totalWins: { increment: wins },
+        totalLosses: { increment: losses },
+      },
+    });
+  }
+
+  async getLeaderboard(limit = 10) {
+    return this.prisma.playerStats.findMany({
+      orderBy: { totalWins: 'desc' },
+      take: limit,
+    });
+  }
+}
+```
+
+---
+
+## **9️⃣ Implement History Controller**
+
+`src/history/history.controller.ts`:
+
+```ts
+import { Controller, Get, Post, Body } from '@nestjs/common';
+import { HistoryService } from './history.service';
+
+@Controller('history')
+export class HistoryController {
+  constructor(private historyService: HistoryService) {}
+
+  @Get('leaderboard')
+  async leaderboard() {
+    return this.historyService.getLeaderboard();
+  }
+
+  @Post('upsert')
+  async upsert(@Body() body: { username: string; bets: number; wins: number; losses: number }) {
+    const { username, bets, wins, losses } = body;
+    return this.historyService.upsertPlayerStats(username, bets, wins, losses);
+  }
+
+  @Get('player')
+  async getPlayer(@Body() body: { username: string }) {
+    return this.historyService.getPlayerStats(body.username);
+  }
+}
+```
+
+---
+
+## **🔟 Update History Module**
+
+`src/history/history.module.ts`:
+
+```ts
+import { Module } from '@nestjs/common';
+import { HistoryService } from './history.service';
+import { HistoryController } from './history.controller';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Module({
+  providers: [HistoryService, PrismaService],
+  controllers: [HistoryController],
+})
+export class HistoryModule {}
+```
+
+---
+
+## **1️⃣1️⃣ Update App Module**
+
+`src/app.module.ts`:
+
+```ts
+import { Module } from '@nestjs/common';
+import { HistoryModule } from './history/history.module';
+import { PrismaService } from './prisma/prisma.service';
+
+@Module({
+  imports: [HistoryModule],
+  providers: [PrismaService],
+})
+export class AppModule {}
+```
+
+---
+
+## **1️⃣2️⃣ Update main.ts**
+
+`src/main.ts`:
+
+```ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableCors();
+  await app.listen(3003); // history-service port
+}
+bootstrap();
+```
+
+---
+
+## **1️⃣3️⃣ Start Service**
+
+```bash
+npm run start:dev
+```
+
+---
+
+## **1️⃣4️⃣ Test APIs with cURL**
+
+**Upsert stats:**
+
+```bash
+curl -X POST http://localhost:3003/history/upsert \
+-H "Content-Type: application/json" \
+-d '{"username":"player1","bets":5,"wins":3,"losses":2}'
+```
+
+**Get player stats:**
+
+```bash
+curl -X GET http://localhost:3003/history/player \
+-H "Content-Type: application/json" \
+-d '{"username":"player1"}'
+```
+
+**Get leaderboard:**
+
+```bash
+curl -X GET http://localhost:3003/history/leaderboard
+```
 
