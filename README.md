@@ -592,3 +592,239 @@ curl -X GET http://localhost:3002/wallet/transactions \
 
 ================================================================================================================
 ================================================================================================================
+                                  Game-service setup
+=============================================================================================================
+
+nvm use 22
+node -v
+==================
+cd /workspaces/backend-revise/backend
+ls
+==================
+nest new game-service             [npm]
+cd game-service
+=====================================================================
+npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
+npm install -D @types/passport-jwt @types/bcrypt
+
+
+npm install prisma@4 --save-dev
+npm install @prisma/client@4
+================================================================
+sudo su postgres
+psql
+
+CREATE DATABASE viral_game_db;
+GRANT ALL PRIVILEGES ON DATABASE viral_game_db TO viral_user;
+
+\c viral_game_db
+GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
+
+\q
+exit
+
+npx prisma init
+======================================================
+
+DATABASE_URL="postgresql://viral_user:viral123@localhost:5432/viral_game_db"            [.env]
+
+==========================================================
+prisma/schema.prisma
+-----------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Users are separate from Auth microservice (or you can store only userId references)
+model Player {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  createdAt DateTime @default(now())
+  gameRounds GameRound[]
+}
+
+model GameRound {
+  id        Int      @id @default(autoincrement())
+  playerId  Int
+  bet       Float
+  result    String
+  payout    Float
+  createdAt DateTime @default(now())
+  player    Player   @relation(fields: [playerId], references: [id])
+}
+
+============================================================================
+
+npx prisma generate
+npx prisma migrate dev --name init
+npx prisma studio
+
+==================================================================
+
+npx nest g service prisma
+==================================
+[src/prisma/prisma.service.ts]
+
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy {
+
+  async onModuleInit() {
+    await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+}
+=====================================================
+
+npx nest g module game
+npx nest g service game
+npx nest g controller game
+
+========================================
+[src/game/game.module.ts]
+
+import { Module } from '@nestjs/common';
+import { GameService } from './game.service';
+import { GameController } from './game.controller';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Module({
+  imports: [],
+  providers: [GameService, PrismaService],
+  controllers: [GameController],
+})
+export class GameModule {}
+
+==========================================
+[src/game.service.ts]
+
+import { Injectable, BadRequestException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class GameService {
+  constructor(private prisma: PrismaService) {}
+
+  // Create a new player
+  async createPlayer(username: string) {
+    return this.prisma.player.create({
+      data: { username },
+    });
+  }
+
+  // Get all players
+  async getPlayers() {
+    return this.prisma.player.findMany();
+  }
+
+  // Play a game round
+  async playRound(playerId: number, bet: number) {
+    if (bet <= 0) throw new BadRequestException('Bet must be > 0');
+
+    // Simple game logic: 50/50 chance win double
+    const win = Math.random() < 0.5;
+    const payout = win ? bet * 2 : 0;
+    const result = win ? 'win' : 'lose';
+
+    // Record the round
+    const round = await this.prisma.gameRound.create({
+      data: {
+        playerId,
+        bet,
+        result,
+        payout,
+      },
+    });
+
+    return round;
+  }
+
+  // Get all rounds for a player
+  async getRounds(playerId: number) {
+    return this.prisma.gameRound.findMany({
+      where: { playerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+}
+
+==================================================================
+[src/game.controller.ts]
+
+import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { GameService } from './game.service';
+
+@Controller('game')
+export class GameController {
+  constructor(private gameService: GameService) {}
+
+  @Post('player')
+  createPlayer(@Body() body: { username: string }) {
+    return this.gameService.createPlayer(body.username);
+  }
+
+  @Get('players')
+  getPlayers() {
+    return this.gameService.getPlayers();
+  }
+
+  @Post('play')
+  playRound(@Body() body: { playerId: number; bet: number }) {
+    return this.gameService.playRound(body.playerId, body.bet);
+  }
+
+  @Get('rounds/:playerId')
+  getRounds(@Param('playerId') playerId: string) {
+    return this.gameService.getRounds(Number(playerId));
+  }
+}
+=========================================================
+[main.ts]
+
+
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableCors();
+  await app.listen(3003);
+}
+bootstrap();
+
+==============================================================
+
+npm run start:dev
+=============================
+[Create player]
+
+curl -X POST http://localhost:3003/game/player \
+-H "Content-Type: application/json" \
+-d '{"username":"player1"}'
+
+[List players]
+curl -X GET http://localhost:3003/game/players
+
+[Play round]
+curl -X POST http://localhost:3003/game/play \
+-H "Content-Type: application/json" \
+-d '{"playerId":1,"bet":100}'
+
+[Get player Rounds]
+curl -X GET http://localhost:3003/game/rounds/1
+
+============================================================================================================
+=========================================================================================================
+
