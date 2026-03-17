@@ -641,23 +641,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Users are separate from Auth microservice (or you can store only userId references)
-model Player {
-  id        Int      @id @default(autoincrement())
-  username  String   @unique
-  createdAt DateTime @default(now())
-  gameRounds GameRound[]
-}
-
 model GameRound {
   id        Int      @id @default(autoincrement())
-  playerId  Int
+  userId    Int
   bet       Float
   result    String
   payout    Float
   createdAt DateTime @default(now())
-  player    Player   @relation(fields: [playerId], references: [id])
 }
+
 
 ============================================================================
 
