@@ -824,62 +824,44 @@ curl -X GET http://localhost:3003/game/rounds/1
 ======================================================================================================
  History Microservice (with Prisma + PostgreSQL)
 
----
-
-## **1️⃣ Setup Node & Nest**
-
-```bash
 nvm use 22
 node -v
-```
+=====================================
 
-```bash
 cd /workspaces/backend-revise/backend
 nest new history-service
 cd history-service
-```
 
----
+==========================
 
-## **2️⃣ Install Dependencies**
-
-```bash
 npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
 npm install -D @types/passport-jwt @types/bcrypt
 npm install prisma@4 --save-dev
 npm install @prisma/client@4
-```
 
----
+===============================================
+sudo su postgres
+psql
 
-## **3️⃣ Initialize Prisma**
-
-```bash
-npx prisma init
-```
-
-Edit `.env`:
-
-```env
-DATABASE_URL="postgresql://viral_user:viral123@localhost:5432/viral_history_db"
-```
-
-> Make sure you created the database beforehand:
-
-```sql
 CREATE DATABASE viral_history_db;
 GRANT ALL PRIVILEGES ON DATABASE viral_history_db TO viral_user;
+
 \c viral_history_db
 GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
-```
 
----
+\q
+exit
 
-## **4️⃣ Define Prisma Schema**
 
-Edit `prisma/schema.prisma`:
+npx prisma init
+==========================================
 
-```prisma
+DATABASE_URL="postgresql://viral_user:viral123@localhost:5432/viral_history_db"     [.env]
+
+===========================================
+[ schema.prisma]
+
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -897,29 +879,22 @@ model PlayerStats {
   totalLosses Float    @default(0)
   createdAt   DateTime @default(now())
 }
-```
 
----
+========================================================
 
-## **5️⃣ Prisma Generate & Migrate**
-
-```bash
 npx prisma generate
 npx prisma migrate dev --name init
-npx prisma studio  # optional GUI to check DB
-```
 
----
+npx prisma studio  
 
-## **6️⃣ Generate Prisma Service in Nest**
+==========================================
 
-```bash
 npx nest g service prisma
-```
 
-`src/prisma/prisma.service.ts`:
+===============================
 
-```ts
+[src/prisma/prisma.service.ts]
+
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
@@ -935,25 +910,18 @@ export class PrismaService extends PrismaClient
     await this.$disconnect();
   }
 }
-```
 
----
+======================================================
 
-## **7️⃣ Generate History Module, Service, Controller**
-
-```bash
 npx nest g module history
 npx nest g service history
 npx nest g controller history
-```
 
----
+=================================================
 
-## **8️⃣ Implement History Service**
+[src/history/history.service.ts]
 
-`src/history/history.service.ts`:
 
-```ts
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -992,15 +960,12 @@ export class HistoryService {
     });
   }
 }
-```
 
----
+===============================================
 
-## **9️⃣ Implement History Controller**
+[src/history/history.controller.ts]
 
-`src/history/history.controller.ts`:
 
-```ts
 import { Controller, Get, Post, Body } from '@nestjs/common';
 import { HistoryService } from './history.service';
 
@@ -1024,15 +989,12 @@ export class HistoryController {
     return this.historyService.getPlayerStats(body.username);
   }
 }
-```
 
----
+=======================================
 
-## **🔟 Update History Module**
+[src/history/history.module.ts]
 
-`src/history/history.module.ts`:
 
-```ts
 import { Module } from '@nestjs/common';
 import { HistoryService } from './history.service';
 import { HistoryController } from './history.controller';
@@ -1043,15 +1005,12 @@ import { PrismaService } from '../prisma/prisma.service';
   controllers: [HistoryController],
 })
 export class HistoryModule {}
-```
 
----
+===========================================
 
-## **1️⃣1️⃣ Update App Module**
+[src/app.module.ts]
 
-`src/app.module.ts`:
 
-```ts
 import { Module } from '@nestjs/common';
 import { HistoryModule } from './history/history.module';
 import { PrismaService } from './prisma/prisma.service';
@@ -1061,15 +1020,11 @@ import { PrismaService } from './prisma/prisma.service';
   providers: [PrismaService],
 })
 export class AppModule {}
-```
 
----
+===============================================
+[src/main.ts]
 
-## **1️⃣2️⃣ Update main.ts**
 
-`src/main.ts`:
-
-```ts
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
@@ -1079,39 +1034,29 @@ async function bootstrap() {
   await app.listen(3003); // history-service port
 }
 bootstrap();
-```
 
----
+======================================
 
-## **1️⃣3️⃣ Start Service**
-
-```bash
 npm run start:dev
-```
 
----
+========================================
 
-## **1️⃣4️⃣ Test APIs with cURL**
+[Upsert stats]
 
-**Upsert stats:**
-
-```bash
 curl -X POST http://localhost:3003/history/upsert \
 -H "Content-Type: application/json" \
 -d '{"username":"player1","bets":5,"wins":3,"losses":2}'
-```
 
-**Get player stats:**
+[Get player stats]
 
-```bash
 curl -X GET http://localhost:3003/history/player \
 -H "Content-Type: application/json" \
 -d '{"username":"player1"}'
-```
 
-**Get leaderboard:**
+[Get leaderboard]
 
-```bash
 curl -X GET http://localhost:3003/history/leaderboard
-```
+
+=======================================================================================================
+=======================================================================================================
 
