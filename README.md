@@ -1006,24 +1006,8 @@ import { PrismaService } from '../prisma/prisma.service';
 })
 export class HistoryModule {}
 
-===========================================
-
-[src/app.module.ts]
-
-
-import { Module } from '@nestjs/common';
-import { HistoryModule } from './history/history.module';
-import { PrismaService } from './prisma/prisma.service';
-
-@Module({
-  imports: [HistoryModule],
-  providers: [PrismaService],
-})
-export class AppModule {}
-
 ===============================================
 [src/main.ts]
-
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -1031,7 +1015,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
-  await app.listen(3003); // history-service port
+  await app.listen(3004); // history-service port
 }
 bootstrap();
 
@@ -1043,19 +1027,19 @@ npm run start:dev
 
 [Upsert stats]
 
-curl -X POST http://localhost:3003/history/upsert \
+curl -X POST http://localhost:3004/history/upsert \
 -H "Content-Type: application/json" \
 -d '{"username":"player1","bets":5,"wins":3,"losses":2}'
 
 [Get player stats]
 
-curl -X GET http://localhost:3003/history/player \
+curl -X GET http://localhost:3004/history/player \
 -H "Content-Type: application/json" \
 -d '{"username":"player1"}'
 
 [Get leaderboard]
 
-curl -X GET http://localhost:3003/history/leaderboard
+curl -X GET http://localhost:3004/history/leaderboard
 
 =======================================================================================================
 =======================================================================================================
