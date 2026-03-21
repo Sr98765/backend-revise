@@ -641,13 +641,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Player {
+  id       Int         @id @default(autoincrement())
+  username String      @unique
+  rounds   GameRound[]
+}
+
 model GameRound {
   id        Int      @id @default(autoincrement())
-  userId    Int
+  playerId  Int
   bet       Float
   result    String
   payout    Float
   createdAt DateTime @default(now())
+
+  player    Player   @relation(fields: [playerId], references: [id])
 }
 
 
@@ -711,36 +719,29 @@ export class GameService {
 
   // Create a new player
   async createPlayer(username: string) {
-    return this.prisma.player.create({
-      data: { username },
-    });
-  }
+  return this.prisma.player.create({
+    data: { username },
+  });
+}
 
   // Get all players
   async getPlayers() {
-    return this.prisma.player.findMany();
-  }
+  return this.prisma.player.findMany();
+}
 
   // Play a game round
   async playRound(playerId: number, bet: number) {
     if (bet <= 0) throw new BadRequestException('Bet must be > 0');
 
-    // Simple game logic: 50/50 chance win double
+    // 50/50 simple game logic
     const win = Math.random() < 0.5;
     const payout = win ? bet * 2 : 0;
     const result = win ? 'win' : 'lose';
 
-    // Record the round
-    const round = await this.prisma.gameRound.create({
-      data: {
-        playerId,
-        bet,
-        result,
-        payout,
-      },
+    // Record round in DB
+    return this.prisma.gameRound.create({
+      data: { playerId, bet, result, payout },
     });
-
-    return round;
   }
 
   // Get all rounds for a player
@@ -792,7 +793,7 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();
-  await app.listen(3003);
+  await app.listen(3003); // Game-Service port
 }
 bootstrap();
 
