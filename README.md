@@ -24,16 +24,26 @@ psql
 
 CREATE DATABASE viral_auth_db;
 CREATE DATABASE viral_wallet_db;
+CREATE DATABASE viral_game_db;
+CREATE DATABASE viral_history_db;
 
 CREATE USER viral_user WITH PASSWORD 'viral123';
 
 GRANT ALL PRIVILEGES ON DATABASE viral_auth_db TO viral_user;
 GRANT ALL PRIVILEGES ON DATABASE viral_wallet_db TO viral_user;
+GRANT ALL PRIVILEGES ON DATABASE viral_game_db TO viral_user;
+GRANT ALL PRIVILEGES ON DATABASE viral_history_db TO viral_user;
 
 \c viral_auth_db
 GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
 
 \c viral_wallet_db
+GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
+
+\c viral_game_db
+GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
+
+\c viral_history_db
 GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
 
 \q
@@ -46,6 +56,22 @@ viral123   [password]
 sudo su postgres
 psql
 ALTER USER viral_user CREATEDB;
+
+===============================================================================================
+===============================================================================================
+
+nvm use 22
+node -v
+==================
+cd /workspaces/backend-revise/backend
+ls
+==================
+nest new auth-service
+nest new wallet-service  
+nest new game-service  
+nest new history-service
+
+[npm]
 ====================================================================================================================
                              auth-service
 =====================================================================================================================  
@@ -149,7 +175,7 @@ export class AuthModule {}
 ===================================
 [src/auth/auth.service.ts]
 
-import { Injectable } from '@nestjs/common'
+import { Injectable, UnauthorizedException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 import { JwtService } from '@nestjs/jwt'
 import * as bcrypt from 'bcrypt'
@@ -163,43 +189,37 @@ export class AuthService {
   ) {}
 
   async register(email: string, password: string) {
-
     const hashed = await bcrypt.hash(password, 10)
-
     const user = await this.prisma.user.create({
-      data: {
-        email,
-        password: hashed,
-      },
+      data: { email, password: hashed },
     })
-
     return { id: user.id, email: user.email }
   }
 
   async login(email: string, password: string) {
-
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    })
-
+    const user = await this.prisma.user.findUnique({ where: { email } })
     if (!user) throw new Error('User not found')
-
     const valid = await bcrypt.compare(password, user.password)
-
     if (!valid) throw new Error('Invalid password')
-
-    const token = this.jwtService.sign({
-      id: user.id,
-      email: user.email,
-    })
-
+    const token = this.jwtService.sign({ id: user.id, email: user.email })
     return { token }
   }
+
+  // ✅ NEW — called by wallet-service
+  async verifyToken(token: string) {
+    try {
+      const payload = this.jwtService.verify(token)
+      return { id: payload.id, email: payload.email }
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token')
+    }
+  }
 }
-==============================
+
+=========================================================
 [src/auth/auth.controller.ts]
 
-import { Controller, Post, Body } from '@nestjs/common'
+import { Controller, Post, Body, Headers, UnauthorizedException } from '@nestjs/common'
 import { AuthService } from './auth.service'
 
 @Controller('auth')
@@ -217,6 +237,13 @@ export class AuthController {
     return this.authService.login(body.email, body.password)
   }
 
+  // ✅ NEW — other services POST here to validate a Bearer token
+  @Post('verify')
+  verify(@Headers('authorization') auth: string) {
+    if (!auth) throw new UnauthorizedException('No token provided')
+    const token = auth.split(' ')[1]
+    return this.authService.verifyToken(token)
+  }
 }
 ======================================
 
@@ -251,11 +278,15 @@ curl -X POST http://localhost:3001/auth/login \
 -H "Content-Type: application/json" \
 -d '{"email":"test@viral.com","password":"123456"}'
 
+[verify]
+
+curl -X POST http://localhost:3001/auth/verify \
+-H "Authorization: Bearer YOUR_JWT_TOKEN"
 ===========================================================================================================================================
 ====================================================================================================================
                              Wallet-service
 =====================================================================================================================  
-
+cd -
 
 
 nvm use 22
@@ -264,12 +295,12 @@ node -v
 cd /workspaces/backend-revise/backend
 ls
 ==================
-nest new wallet-service             [npm]
 cd wallet-service
 ==========================
 
 npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
 npm install -D @types/passport-jwt @types/bcrypt
+npm install axios
 
 npm install prisma@4 --save-dev
 npm install @prisma/client@4
@@ -343,18 +374,12 @@ npx nest g controller wallet
 [src/wallet/wallet.module.ts]
 
 import { Module } from '@nestjs/common'
-import { JwtModule } from '@nestjs/jwt'
 import { WalletService } from './wallet.service'
 import { WalletController } from './wallet.controller'
 import { PrismaService } from '../prisma/prisma.service'
 
 @Module({
-  imports: [
-    JwtModule.register({
-      secret: 'viral_secret',
-      signOptions: { expiresIn: '1h' },
-    }),
-  ],
+  imports: [],                          // ✅ JwtModule removed
   providers: [WalletService, PrismaService],
   controllers: [WalletController],
 })
@@ -366,175 +391,127 @@ export class WalletModule {}
 
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class WalletService {
   constructor(
     private prisma: PrismaService,
-    private jwtService: JwtService,
+    // ✅ JwtService removed — wallet no longer handles tokens
   ) {}
 
-  /**
-   * Get wallet balance for a user.
-   * If wallet doesn't exist, it will be automatically created with balance 0.
-   */
   async getBalance(userId: number) {
     const wallet = await this.prisma.wallet.upsert({
       where: { userId },
       update: {},
       create: { userId, balance: 0 },
     });
-
     return { balance: wallet.balance };
   }
 
-  /**
-   * Deposit money into user's wallet.
-   * Creates the wallet automatically if it doesn't exist.
-   */
   async deposit(userId: number, amount: number) {
     if (amount <= 0) throw new BadRequestException('Deposit amount must be greater than 0');
 
-    // Upsert wallet (create if not exists)
     const wallet = await this.prisma.wallet.upsert({
       where: { userId },
       update: { balance: { increment: amount } },
       create: { userId, balance: amount },
     });
 
-    // Record the deposit transaction
     await this.prisma.transaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'deposit',
-        amount,
-      },
+      data: { walletId: wallet.id, type: 'deposit', amount },
     });
 
     return { balance: wallet.balance };
   }
 
-  /**
-   * Withdraw money from user's wallet.
-   * Throws error if balance is insufficient.
-   */
   async withdraw(userId: number, amount: number) {
     if (amount <= 0) throw new BadRequestException('Withdraw amount must be greater than 0');
 
-    // Find the wallet
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) throw new BadRequestException('Wallet not found');
     if (wallet.balance < amount) throw new BadRequestException('Insufficient balance');
 
-    // Update balance
     const updated = await this.prisma.wallet.update({
       where: { userId },
       data: { balance: { decrement: amount } },
     });
 
-    // Record the withdrawal transaction
     await this.prisma.transaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'withdraw',
-        amount,
-      },
+      data: { walletId: wallet.id, type: 'withdraw', amount },
     });
 
     return { balance: updated.balance };
   }
 
-  /**
-   * Optional: Get full transaction history for a user
-   */
   async getTransactions(userId: number) {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     if (!wallet) return [];
 
-    const transactions = await this.prisma.transaction.findMany({
+    return this.prisma.transaction.findMany({
       where: { walletId: wallet.id },
       orderBy: { createdAt: 'desc' },
     });
-
-    return transactions;
   }
 }
 =========================================================================
 
 [src/wallet/wallet.controller.ts]
 
-import { Controller, Get, Post, Body, Headers, BadRequestException } from '@nestjs/common';
-import { WalletService } from './wallet.service';
-import { JwtService } from '@nestjs/jwt';
+import { Controller, Get, Post, Body, Headers, BadRequestException, UnauthorizedException } from '@nestjs/common'
+import { WalletService } from './wallet.service'
+import axios from 'axios'
+
+const AUTH_SERVICE_URL = 'http://localhost:3001'
 
 @Controller('wallet')
 export class WalletController {
-  constructor(
-    private walletService: WalletService,
-    private jwtService: JwtService,
-  ) {}
+  constructor(private walletService: WalletService) {}
 
-  /**
-   * Helper: Extract userId from Authorization header (Bearer token)
-   */
-  private getUserId(authHeader: string): number {
-    if (!authHeader) throw new BadRequestException('No Authorization header provided');
+  // ✅ Now delegates token verification to auth-service
+  private async getUserId(authHeader: string): Promise<number> {
+    if (!authHeader) throw new BadRequestException('No Authorization header provided')
     try {
-      const token = authHeader.split(' ')[1]; // Bearer <token>
-      const decoded: any = this.jwtService.verify(token, { secret: 'viral_secret' });
-      return decoded.id;
-    } catch (error) {
-      throw new BadRequestException('Invalid or expired token');
+      const response = await axios.post(
+        `${AUTH_SERVICE_URL}/auth/verify`,
+        {},
+        { headers: { authorization: authHeader } },
+      )
+      return response.data.id
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token')
     }
   }
 
-  /**
-   * GET /wallet/balance
-   * Returns the current balance for the logged-in user
-   */
   @Get('balance')
   async getBalance(@Headers('authorization') auth: string) {
-    const userId = this.getUserId(auth);
-    return this.walletService.getBalance(userId);
+    const userId = await this.getUserId(auth)
+    return this.walletService.getBalance(userId)
   }
 
-  /**
-   * POST /wallet/deposit
-   * Body: { amount: number }
-   */
   @Post('deposit')
   async deposit(
     @Headers('authorization') auth: string,
     @Body() body: { amount: number },
   ) {
-    const userId = this.getUserId(auth);
-    if (!body.amount) throw new BadRequestException('Amount is required');
-    return this.walletService.deposit(userId, body.amount);
+    const userId = await this.getUserId(auth)
+    if (!body.amount) throw new BadRequestException('Amount is required')
+    return this.walletService.deposit(userId, body.amount)
   }
 
-  /**
-   * POST /wallet/withdraw
-   * Body: { amount: number }
-   */
   @Post('withdraw')
   async withdraw(
     @Headers('authorization') auth: string,
     @Body() body: { amount: number },
   ) {
-    const userId = this.getUserId(auth);
-    if (!body.amount) throw new BadRequestException('Amount is required');
-    return this.walletService.withdraw(userId, body.amount);
+    const userId = await this.getUserId(auth)
+    if (!body.amount) throw new BadRequestException('Amount is required')
+    return this.walletService.withdraw(userId, body.amount)
   }
 
-  /**
-   * GET /wallet/transactions
-   * Returns full transaction history for the logged-in user
-   */
   @Get('transactions')
   async getTransactions(@Headers('authorization') auth: string) {
-    const userId = this.getUserId(auth);
-    return this.walletService.getTransactions(userId);
+    const userId = await this.getUserId(auth)
+    return this.walletService.getTransactions(userId)
   }
 }
 
@@ -594,6 +571,7 @@ curl -X GET http://localhost:3002/wallet/transactions \
 ================================================================================================================
                                   Game-service setup
 =============================================================================================================
+cd -
 
 nvm use 22
 node -v
@@ -601,27 +579,14 @@ node -v
 cd /workspaces/backend-revise/backend
 ls
 ==================
-nest new game-service             [npm]
 cd game-service
 =====================================================================
 npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
 npm install -D @types/passport-jwt @types/bcrypt
-
+npm install axios
 
 npm install prisma@4 --save-dev
 npm install @prisma/client@4
-================================================================
-sudo su postgres
-psql
-
-CREATE DATABASE viral_game_db;
-GRANT ALL PRIVILEGES ON DATABASE viral_game_db TO viral_user;
-
-\c viral_game_db
-GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
-
-\q
-exit
 
 npx prisma init
 ======================================================
@@ -710,54 +675,90 @@ export class GameModule {}
 ==========================================
 [src/game.service.ts]
 
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable, BadRequestException } from '@nestjs/common'
+import { PrismaService } from '../prisma/prisma.service'
+import axios from 'axios'
+
+const WALLET_SERVICE_URL = 'http://localhost:3002'
+const HISTORY_SERVICE_URL = 'http://localhost:3004'
 
 @Injectable()
 export class GameService {
   constructor(private prisma: PrismaService) {}
 
-  // Create a new player
   async createPlayer(username: string) {
-  return this.prisma.player.create({
-    data: { username },
-  });
-}
-
-  // Get all players
-  async getPlayers() {
-  return this.prisma.player.findMany();
-}
-
-  // Play a game round
-  async playRound(playerId: number, bet: number) {
-    if (bet <= 0) throw new BadRequestException('Bet must be > 0');
-
-    // 50/50 simple game logic
-    const win = Math.random() < 0.5;
-    const payout = win ? bet * 2 : 0;
-    const result = win ? 'win' : 'lose';
-
-    // Record round in DB
-    return this.prisma.gameRound.create({
-      data: { playerId, bet, result, payout },
-    });
+    return this.prisma.player.create({
+      data: { username },
+    })
   }
 
-  // Get all rounds for a player
+  async getPlayers() {
+    return this.prisma.player.findMany()
+  }
+
+  // ✅ Now wired to wallet + history
+  async playRound(playerId: number, bet: number, authHeader: string) {
+    if (bet <= 0) throw new BadRequestException('Bet must be > 0')
+
+    // 1️⃣ Deduct bet from wallet (fails if insufficient balance)
+    try {
+      await axios.post(
+        `${WALLET_SERVICE_URL}/wallet/withdraw`,
+        { amount: bet },
+        { headers: { authorization: authHeader } },
+      )
+    } catch (err) {
+      throw new BadRequestException(
+        err.response?.data?.message || 'Wallet withdraw failed'
+      )
+    }
+
+    // 2️⃣ Run game logic
+    const win = Math.random() < 0.5
+    const payout = win ? bet * 2 : 0
+    const result = win ? 'win' : 'lose'
+
+    // 3️⃣ Pay out winnings if player won
+    if (win) {
+      await axios.post(
+        `${WALLET_SERVICE_URL}/wallet/deposit`,
+        { amount: payout },
+        { headers: { authorization: authHeader } },
+      )
+    }
+
+    // 4️⃣ Save round in game DB
+    const round = await this.prisma.gameRound.create({
+      data: { playerId, bet, result, payout },
+    })
+
+    // 5️⃣ Push stats to history-service (fire-and-forget, don't block)
+    const player = await this.prisma.player.findUnique({ where: { id: playerId } })
+    if (player) {
+      axios.post(`${HISTORY_SERVICE_URL}/history/upsert`, {
+        username: player.username,
+        bets: bet,
+        wins: win ? payout : 0,
+        losses: win ? 0 : bet,
+      }).catch(() => {})  // silent fail — history is non-critical
+    }
+
+    return round
+  }
+
   async getRounds(playerId: number) {
     return this.prisma.gameRound.findMany({
       where: { playerId },
       orderBy: { createdAt: 'desc' },
-    });
+    })
   }
 }
 
 ==================================================================
 [src/game.controller.ts]
 
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
-import { GameService } from './game.service';
+import { Controller, Post, Body, Get, Param, Headers, BadRequestException } from '@nestjs/common'
+import { GameService } from './game.service'
 
 @Controller('game')
 export class GameController {
@@ -765,24 +766,30 @@ export class GameController {
 
   @Post('player')
   createPlayer(@Body() body: { username: string }) {
-    return this.gameService.createPlayer(body.username);
+    return this.gameService.createPlayer(body.username)
   }
 
   @Get('players')
   getPlayers() {
-    return this.gameService.getPlayers();
+    return this.gameService.getPlayers()
   }
 
+  // ✅ Now requires Authorization header
   @Post('play')
-  playRound(@Body() body: { playerId: number; bet: number }) {
-    return this.gameService.playRound(body.playerId, body.bet);
+  playRound(
+    @Headers('authorization') auth: string,
+    @Body() body: { playerId: number; bet: number },
+  ) {
+    if (!auth) throw new BadRequestException('Authorization header required')
+    return this.gameService.playRound(body.playerId, body.bet, auth)
   }
 
   @Get('rounds/:playerId')
   getRounds(@Param('playerId') playerId: string) {
-    return this.gameService.getRounds(Number(playerId));
+    return this.gameService.getRounds(Number(playerId))
   }
 }
+
 =========================================================
 [main.ts]
 
@@ -822,38 +829,26 @@ curl -X GET http://localhost:3003/game/rounds/1
 =========================================================================================================
                                  History-service
 ======================================================================================================
- History Microservice (with Prisma + PostgreSQL)
+cd -
 
 nvm use 22
 node -v
 =====================================
 
 cd /workspaces/backend-revise/backend
-nest new history-service
+
 cd history-service
 
 ==========================
 
 npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
 npm install -D @types/passport-jwt @types/bcrypt
+
 npm install prisma@4 --save-dev
 npm install @prisma/client@4
 
-===============================================
-sudo su postgres
-psql
-
-CREATE DATABASE viral_history_db;
-GRANT ALL PRIVILEGES ON DATABASE viral_history_db TO viral_user;
-
-\c viral_history_db
-GRANT ALL PRIVILEGES ON SCHEMA public TO viral_user;
-
-\q
-exit
-
-
 npx prisma init
+
 ==========================================
 
 DATABASE_URL="postgresql://viral_user:viral123@localhost:5432/viral_history_db"     [.env]
@@ -1043,6 +1038,87 @@ curl -X GET http://localhost:3004/history/leaderboard
 
 ==============================================================================================================================
 ==============================================================================================================================
+
+
+Step 6 — Start all 4 services and test the full flow
+
+Open 4 terminals:
+
+[cd backend/auth-service]
+npm run start:dev
+
+[cd wallet-service]
+npm run start:dev
+
+[cd game-service]
+npm run start:dev
+
+[cd history-service] 
+npm run start:dev
+=====================================
+Then run the full flow:
+
+[Register]
+
+curl -X POST http://localhost:3001/auth/register \
+-H "Content-Type: application/json" \
+-d '{"email":"player@viral.com","password":"123456"}'
+
+[Login]
+curl -X POST http://localhost:3001/auth/login \
+-H "Content-Type: application/json" \
+-d '{"email":"player@viral.com","password":"123456"}'
+
+[Set token as variable (replace with your actual token)]
+TOKEN="eyJhbGci..."
+
+[Deposit funds]
+curl -X POST http://localhost:3002/wallet/deposit \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '{"amount":500}'
+
+[Create a game player]
+curl -X POST http://localhost:3003/game/player \
+-H "Content-Type: application/json" \
+-d '{"username":"player1"}'
+
+[Play a round (deducts bet, pays out if win, updates history)]
+curl -X POST http://localhost:3003/game/play \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '{"playerId":1,"bet":100}'
+
+[Check wallet balance — should reflect the result]
+curl -X GET http://localhost:3002/wallet/balance \
+-H "Authorization: Bearer $TOKEN"
+
+[Check leaderboard]
+curl -X GET http://localhost:3004/history/leaderboard
+===================================================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
                                   Connection
 ==============================================================================================================================
